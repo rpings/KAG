@@ -146,6 +146,9 @@ class KnowledgeUnitSchemaFreeExtractor(ExtractorABC):
             if spg_type is None:
                 label = "Others"
                 spg_type = self.schema.get(label)
+                # If "Others" also doesn't exist, log warning but continue
+                if spg_type is None:
+                    logger.warning(f"Schema type '{label}' not found, and 'Others' also not found. Entity '{name}' may not be properly processed.")
                 item.label = label
             description = item.properties.get("desc", "")
             semantic_type = item.properties.get("semanticType", label)
@@ -241,7 +244,7 @@ class KnowledgeUnitSchemaFreeExtractor(ExtractorABC):
         Returns:
             Standardized entity information.
         """
-        return self.llm.invoke(
+        return await self.llm.ainvoke(
             {"input": passage, "named_entities": entities},
             self.kn_prompt,
             with_except=False,
@@ -302,6 +305,9 @@ class KnowledgeUnitSchemaFreeExtractor(ExtractorABC):
         if spg_type is None:
             s_label = "Others"
             spg_type = self.schema.get(s_label)
+            # If "Others" also doesn't exist, log warning but continue
+            if spg_type is None:
+                logger.warning(f"Schema type '{s_label}' not found, and 'Others' also not found. Skipping property processing for entity {s_name}.")
         record["category"] = s_label
 
         domain_ontology = properties.get("ontology", "")
@@ -367,6 +373,9 @@ class KnowledgeUnitSchemaFreeExtractor(ExtractorABC):
         for prop_name, prop_value in properties.items():
             if prop_value == "NAN":
                 tmp_properties.pop(prop_name)
+                continue
+            # Skip if spg_type is None (schema type not found)
+            if spg_type is None:
                 continue
             if prop_name in spg_type.properties:
                 from knext.schema.model.property import Property
