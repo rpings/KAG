@@ -15,6 +15,7 @@ class OutputQuestionPrompt(PromptABC):
 4.如果上下文为空，则根据模型内部知识进行回答
 5.输出时按照类似这样的句式生成“根据问题，我首先考虑到xxx，其次考虑yyy，最后zzz，综上，所以mmmm”
 6.出语调要求通顺，不要有机械感
+7.输出的语言要和问题的语言保持一致
 上下文：
 $context
 
@@ -28,6 +29,7 @@ $context
 4.If the context is empty, respond based on the model's internal knowledge.
 5.When outputting, use a sentence structure similar to this: "Based on the question, I first considered xxx, then yyy, and finally zzz. In conclusion, therefore mmmm."
 6.The tone of the response should be smooth and natural, avoiding any mechanical feel.
+7.The language of the output should match the language of the question.
 
 Context: 
 $context

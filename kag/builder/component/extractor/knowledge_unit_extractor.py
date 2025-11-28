@@ -593,11 +593,49 @@ class KnowledgeUnitSchemaFreeExtractor(ExtractorABC):
                 {"name": knowledge_id, "category": "KnowledgeUnit"}
             )
             core_entities = {}
-            for item in knowledge_value.get("core_entities", "").split(","):
-                if not item.strip():
-                    continue
-                core_entities[item.strip()] = "Others"
-
+            core_entities_value = knowledge_value.get("core_entities", "")
+            
+            # Handle different types of core_entities: string, dict, list, or None
+            if isinstance(core_entities_value, str):
+                # If it's a string, split by comma
+                for item in core_entities_value.split(","):
+                    if not item.strip():
+                        continue
+                    core_entities[item.strip()] = "Others"
+            elif isinstance(core_entities_value, dict):
+                # If it's a dict, use the keys as entity names
+                for item in core_entities_value.keys():
+                    if not item or not str(item).strip():
+                        continue
+                    entity_name = str(item).strip()
+                    # Get the type from the dict value, default to "Others"
+                    entity_type = core_entities_value[item]
+                    if isinstance(entity_type, dict):
+                        entity_type = entity_type.get("category", "Others")
+                    elif not isinstance(entity_type, str):
+                        entity_type = "Others"
+                    core_entities[entity_name] = entity_type
+            elif isinstance(core_entities_value, list):
+                # If it's a list, iterate over items
+                for item in core_entities_value:
+                    if isinstance(item, str):
+                        if not item.strip():
+                            continue
+                        core_entities[item.strip()] = "Others"
+                    elif isinstance(item, dict):
+                        entity_name = item.get("name", "")
+                        if entity_name:
+                            entity_type = item.get("category", "Others")
+                            core_entities[entity_name] = entity_type
+                    else:
+                        # Convert to string if it's a basic type (int, float, bool, None)
+                        # Skip complex types that shouldn't be converted
+                        if item is None:
+                            continue
+                        elif isinstance(item, (int, float, bool)):
+                            item_str = str(item).strip()
+                            if item_str:
+                                core_entities[item_str] = "Others"
             for core_entity, ent_type in core_entities.items():
                 if core_entity == "":
                     continue

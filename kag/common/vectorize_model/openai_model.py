@@ -34,6 +34,7 @@ class OpenAIVectorizeModel(VectorizeModelABC):
         timeout: float = None,
         max_rate: float = 1000,
         time_period: float = 1,
+        batch_size: int = 25,
         **kwargs,
     ):
         """
@@ -44,12 +45,14 @@ class OpenAIVectorizeModel(VectorizeModelABC):
             api_key (str, optional): The API key for accessing the OpenAI service. Defaults to "".
             base_url (str, optional): The base URL for the OpenAI service. Defaults to "".
             vector_dimensions (int, optional): The number of dimensions for the embedding vectors. Defaults to None.
+            batch_size (int, optional): Maximum batch size for API calls. Defaults to 25.
         """
         api_key = api_key if api_key else "abc123"
         name = self.generate_key(base_url, model, api_key)
         super().__init__(name, vector_dimensions, max_rate, time_period)
         self.model = model
         self.timeout = timeout
+        self.max_batch_size = batch_size
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=self.timeout)
         self.aclient = AsyncOpenAI(
             api_key=api_key, base_url=base_url, timeout=self.timeout
@@ -71,7 +74,6 @@ class OpenAIVectorizeModel(VectorizeModelABC):
         Returns:
             Union[EmbeddingVector, Iterable[EmbeddingVector]]: The embedding vector(s) of the text(s).
         """
-
         try:
             # Handle empty strings in the input
             if isinstance(texts, list):
@@ -85,12 +87,17 @@ class OpenAIVectorizeModel(VectorizeModelABC):
                 if not filtered_texts:
                     return [[] for _ in texts]  # Return empty vectors for all inputs
 
-                results = self.client.embeddings.create(
-                    input=filtered_texts, model=self.model
-                )
+                # Split into batches if exceeds max_batch_size
+                all_embeddings = []
+                for i in range(0, len(filtered_texts), self.max_batch_size):
+                    batch_texts = filtered_texts[i:i + self.max_batch_size]
+                    batch_results = self.client.embeddings.create(
+                        input=batch_texts, model=self.model
+                    )
+                    batch_embeddings = [item.embedding for item in batch_results.data]
+                    all_embeddings.extend(batch_embeddings)
 
                 # Reconstruct the results with empty lists for empty strings
-                embeddings = [item.embedding for item in results.data]
                 full_results = []
                 embedding_idx = 0
 
@@ -98,27 +105,38 @@ class OpenAIVectorizeModel(VectorizeModelABC):
                     if empty_indices[i]:
                         full_results.append([])  # Empty embedding for empty string
                     else:
-                        full_results.append(embeddings[embedding_idx])
+                        full_results.append(all_embeddings[embedding_idx])
                         embedding_idx += 1
 
                 return full_results
-            elif isinstance(texts, str) and not texts.strip():
-                return []  # Return empty vector for empty string
-            else:
+            elif isinstance(texts, str):
+                # Handle single string input
+                if not texts.strip():
+                    return []  # Return empty vector for empty string
                 results = self.client.embeddings.create(input=texts, model=self.model)
+                results = [item.embedding for item in results.data]
+                assert len(results) == 1
+                return results[0]
+            else:
+                # Handle other iterable types
+                texts_list = list(texts)
+                results = self.client.embeddings.create(input=texts_list, model=self.model)
+                results = [item.embedding for item in results.data]
+                assert len(results) == len(texts_list)
+                return results
         except Exception as e:
             logger.error(f"Error: {e}")
             logger.error(f"input: {texts}")
             logger.error(f"model: {self.model}")
             logger.error(f"timeout: {self.timeout}")
-            return None
-        results = [item.embedding for item in results.data]
-        if isinstance(texts, str):
-            assert len(results) == 1
-            return results[0]
-        else:
-            assert len(results) == len(texts)
-            return results
+            # Return empty list instead of None to avoid TypeError in calling code
+            if isinstance(texts, list):
+                return [[] for _ in texts]
+            elif isinstance(texts, str):
+                return []
+            else:
+                # For other iterable types, return empty list
+                return []
 
     async def avectorize(
         self, texts: Union[str, Iterable[str]]
@@ -133,24 +151,60 @@ class OpenAIVectorizeModel(VectorizeModelABC):
             Union[EmbeddingVector, Iterable[EmbeddingVector]]: The embedding vector(s) of the text(s).
         """
         async with self.limiter:
-            texts = [text if text.strip() != "" else "none" for text in texts]
             try:
-                results = await self.aclient.embeddings.create(
-                    input=texts, model=self.model
-                )
+                if isinstance(texts, list):
+                    texts = [text if text.strip() != "" else "none" for text in texts]
+                    
+                    # Split into batches if exceeds max_batch_size
+                    all_embeddings = []
+                    for i in range(0, len(texts), self.max_batch_size):
+                        batch_texts = texts[i:i + self.max_batch_size]
+                        try:
+                            batch_results = await self.aclient.embeddings.create(
+                                input=batch_texts, model=self.model
+                            )
+                            batch_embeddings = [item.embedding for item in batch_results.data]
+                            all_embeddings.extend(batch_embeddings)
+                        except Exception as e:
+                            logger.error(f"Error in batch {i//self.max_batch_size + 1}: {e}")
+                            logger.error(f"batch_texts: {batch_texts}")
+                            logger.error(f"model: {self.model}")
+                            logger.error(f"timeout: {self.timeout}")
+                            # Return empty embeddings for this batch
+                            all_embeddings.extend([[] for _ in batch_texts])
+                    
+                    return all_embeddings
+                elif isinstance(texts, str):
+                    # Single text (string)
+                    text = texts if texts.strip() != "" else "none"
+                    results = await self.aclient.embeddings.create(
+                        input=text, model=self.model
+                    )
+                    results = [item.embedding for item in results.data]
+                    assert len(results) == 1
+                    return results[0]
+                else:
+                    # Handle other iterable types
+                    texts_list = list(texts)
+                    texts_list = [text if text.strip() != "" else "none" for text in texts_list]
+                    results = await self.aclient.embeddings.create(
+                        input=texts_list, model=self.model
+                    )
+                    results = [item.embedding for item in results.data]
+                    assert len(results) == len(texts_list)
+                    return results
             except Exception as e:
                 logger.error(f"Error: {e}")
                 logger.error(f"input: {texts}")
                 logger.error(f"model: {self.model}")
                 logger.error(f"timeout: {self.timeout}")
-                return None
-        results = [item.embedding for item in results.data]
-        if isinstance(texts, str):
-            assert len(results) == 1
-            return results[0]
-        else:
-            assert len(results) == len(texts)
-            return results
+                # Return appropriate empty result based on input type
+                if isinstance(texts, list):
+                    return [[] for _ in texts]
+                elif isinstance(texts, str):
+                    return []
+                else:
+                    return []
 
 
 @VectorizeModelABC.register("azure_openai")
